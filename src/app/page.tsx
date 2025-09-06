@@ -1,103 +1,171 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState } from "react";
+import * as ort from "onnxruntime-web";
+
+export default function Page() {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [style, setStyle] = useState<string>("picasso");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const modelMap: Record<string, string> = {
+    picasso: "/models/fast_neural_style-udnie-9.onnx",
+    vangogh: "/models/fast_neural_style-mosaic-9.onnx",
+    cyberpunk: "/models/fast_neural_style-candy-9.onnx",
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setPreview(URL.createObjectURL(selectedFile));
+      setProcessedImage(null);
+      setError(null);
+    }
+  };
+
+  const handleProcessImage = async () => {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const modelPath = modelMap[style];
+      const session = await ort.InferenceSession.create(modelPath, {
+        executionProviders: ["wasm"],
+      });
+
+      const imgBitmap = await createImageBitmap(file);
+      const canvas = document.createElement("canvas");
+      canvas.width = 224;
+      canvas.height = 224;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Failed to get canvas context");
+      ctx.drawImage(imgBitmap, 0, 0, 224, 224);
+
+      const imgData = ctx.getImageData(0, 0, 224, 224);
+      const floatData = new Float32Array(1 * 3 * 224 * 224);
+
+      for (let y = 0; y < 224; y++) {
+        for (let x = 0; x < 224; x++) {
+          const idx = (y * 224 + x) * 4;
+          const r = imgData.data[idx] / 255;
+          const g = imgData.data[idx + 1] / 255;
+          const b = imgData.data[idx + 2] / 255;
+          const j = y * 224 + x;
+          floatData[j] = r;
+          floatData[j + 224 * 224] = g;
+          floatData[j + 2 * 224 * 224] = b;
+        }
+      }
+
+      const inputTensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+      const feeds: Record<string, ort.Tensor> = {};
+      feeds[session.inputNames[0]] = inputTensor;
+
+      const output = await session.run(feeds);
+      const outputTensor = output[session.outputNames[0]];
+
+      const outCanvas = document.createElement("canvas");
+      outCanvas.width = 224;
+      outCanvas.height = 224;
+      const outCtx = outCanvas.getContext("2d");
+      if (!outCtx) throw new Error("Failed to get output canvas context");
+
+      const outImageData = outCtx.createImageData(224, 224);
+      const outData = outputTensor.data as Float32Array;
+
+      for (let y = 0; y < 224; y++) {
+        for (let x = 0; x < 224; x++) {
+          const j = y * 224 + x;
+          const i = j * 4;
+
+          const r = Math.min(255, Math.max(0, outData[j] * 255));
+          const g = Math.min(255, Math.max(0, outData[j + 224 * 224] * 255));
+          const b = Math.min(255, Math.max(0, outData[j + 2 * 224 * 224] * 255));
+
+          outImageData.data[i] = r;
+          outImageData.data[i + 1] = g;
+          outImageData.data[i + 2] = b;
+          outImageData.data[i + 3] = 255;
+        }
+      }
+
+      outCtx.putImageData(outImageData, 0, 0);
+      setProcessedImage(outCanvas.toDataURL("image/png"));
+    } catch (err) {
+      console.error(err);
+      setError("Processing failed. Make sure the models exist in /public/models/ and inputs match.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-white flex flex-col items-center justify-start py-10 px-4">
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl p-8 space-y-6">
+        <h2 className="text-2xl font-bold text-center text-indigo-700">
+          🎨 WASM ONNX Style Transfer
+        </h2>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Upload Image</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            className="mt-2 w-full border border-gray-300 rounded-lg p-2"
+          />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
+
+        {preview && (
+          <div className="flex flex-col items-center">
+            <p className="text-sm font-semibold text-gray-600">Preview:</p>
+            <img
+              src={preview}
+              alt="Preview"
+              className="mt-2 rounded-lg max-h-60 object-contain border"
+            />
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Choose Style</label>
+          <select
+            value={style}
+            onChange={(e) => setStyle(e.target.value)}
+            className="mt-2 w-full border border-gray-300 rounded-lg p-2"
+          >
+            <option value="picasso">Picasso</option>
+            <option value="vangogh">Van Gogh</option>
+            <option value="cyberpunk">Cyberpunk</option>
+          </select>
+        </div>
+
+        <button
+          onClick={handleProcessImage}
+          disabled={!file || loading}
+          className="w-full mt-4 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 transition-colors"
         >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          {loading ? "Processing..." : "Apply Style"}
+        </button>
+
+        {error && <div className="text-red-600 text-center text-sm mt-2">{error}</div>}
+
+        {processedImage && (
+          <div className="flex flex-col items-center">
+            <p className="text-sm font-semibold text-gray-600">Processed Image:</p>
+            <img
+              src={processedImage}
+              alt="Processed"
+              className="mt-2 rounded-lg max-h-60 object-contain border"
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
